@@ -5,16 +5,50 @@ import asyncio
 import websockets
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from twilio.rest import Client
+from groq import Groq
 
-# 1. Initialize the FastAPI app instance first
 app = FastAPI()
 
-# 2. Load Environment Variables
+# Load Environment Variables
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 MY_PHONE_NUMBER = os.getenv("MY_PHONE_NUMBER")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# Initialize Groq Client
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+# Simple conversation memory
+system_prompt = {
+    "role": "system", 
+    "content": "You are a witty, concise, and helpful AI voice assistant on a phone call. Keep your answers brief, natural, and under 2 sentences so the call flows fast."
+}
+
+
+async def generate_groq_response(user_text: str):
+    """Sends the transcribed user text to Groq and prints the reply."""
+    try:
+        print(f"🧠 Thinking response for: '{user_text}'...", flush=True)
+        
+        # Call Groq's high-speed Llama 3.3 model
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                system_prompt,
+                {"role": "user", "content": user_text}
+            ],
+            temperature=0.7,
+            max_tokens=100
+        )
+        
+        reply = completion.choices[0].message.content
+        print(f"🤖 AI Response: {reply}", flush=True)
+        return reply
+
+    except Exception as e:
+        print(f"Groq API Error: {e}", flush=True)
 
 
 @app.get("/")
@@ -51,10 +85,8 @@ async def handle_incoming_call(request: Request):
 @app.websocket("/media-stream")
 async def handle_media_stream(websocket: WebSocket):
     await websocket.accept()
-    print("Twilio WebSocket connection opened!")
+    print("Twilio WebSocket connection opened!", flush=True)
     
-    # Configure Deepgram to receive Twilio's raw 8000Hz mu-law audio
-      # Added interim_results=true to instantly stream partial transcripts
     deepgram_url = "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000&channels=1&model=nova-3&interim_results=true"
     
     try:
@@ -63,7 +95,6 @@ async def handle_media_stream(websocket: WebSocket):
             additional_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"}
         ) as deepgram_ws:
             
-            # Listen for incoming transcripts from Deepgram
             async def listen_to_deepgram():
                 try:
                     async for message in deepgram_ws:
@@ -74,25 +105,23 @@ async def handle_media_stream(websocket: WebSocket):
                             
                             if transcript.strip():
                                 if data.get("is_final"):
-                                    # flush=True forces Render to instantly show the log
                                     print(f"✅ Final: {transcript}", flush=True)
+                                    # Trigger Groq brain when a final sentence is captured
+                                    asyncio.create_task(generate_groq_response(transcript))
                                 else:
-                                    # Watch the AI process your words live
                                     print(f"⏳ Partial: {transcript}", flush=True)
                                     
                 except Exception as e:
                     print(f"Deepgram listen error: {e}", flush=True)
                     
-            # Launch transcription listener in the background
             asyncio.create_task(listen_to_deepgram())
             
-            # Stream audio payloads from Twilio directly to Deepgram
             while True:
                 data = await websocket.receive_text()
                 msg = json.loads(data)
                 
                 if msg.get("event") == "start":
-                    print("Twilio media stream started!")
+                    print("Twilio media stream started!", flush=True)
                 
                 elif msg.get("event") == "media":
                     payload = msg["media"]["payload"]
@@ -100,10 +129,10 @@ async def handle_media_stream(websocket: WebSocket):
                     await deepgram_ws.send(chunk)
                 
                 elif msg.get("event") == "stop":
-                    print("Twilio media stream stopped.")
+                    print("Twilio media stream stopped.", flush=True)
                     break
                     
     except WebSocketDisconnect:
-        print("Twilio WebSocket disconnected.")
+        print("Twilio WebSocket disconnected.", flush=True)
     except Exception as e:
-        print(f"Connection error: {e}")
+        print(f"Connection error: {e}", flush=True)
