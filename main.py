@@ -31,7 +31,7 @@ system_prompt = {
 async def synthesize_and_stream_audio(text: str, twilio_ws: WebSocket, stream_sid: str):
     """Sends text to ElevenLabs and streams the resulting audio back to Twilio."""
     # Using 'Rachel' as the default voice ID
-    voice_id = "21m00Tcm4TlvDq8ikWAM" 
+    voice_id = "pNInz6obpgDQGcFmaJgB" 
     
     # Request ulaw_8000 format directly so we don't have to transcode for Twilio
     elevenlabs_ws_url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_flash_v2_5&output_format=ulaw_8000"
