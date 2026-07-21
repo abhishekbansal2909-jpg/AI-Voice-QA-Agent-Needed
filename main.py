@@ -59,7 +59,7 @@ async def handle_media_stream(websocket: WebSocket):
     try:
         async with websockets.connect(
             deepgram_url,
-            extra_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"}
+            additional_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"}
         ) as deepgram_ws:
             
             # Listen for incoming transcripts from Deepgram
