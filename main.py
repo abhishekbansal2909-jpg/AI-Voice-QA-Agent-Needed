@@ -54,7 +54,8 @@ async def handle_media_stream(websocket: WebSocket):
     print("Twilio WebSocket connection opened!")
     
     # Configure Deepgram to receive Twilio's raw 8000Hz mu-law audio
-    deepgram_url = "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000&channels=1&model=nova-3"
+      # Added interim_results=true to instantly stream partial transcripts
+    deepgram_url = "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000&channels=1&model=nova-3&interim_results=true"
     
     try:
         async with websockets.connect(
@@ -67,12 +68,20 @@ async def handle_media_stream(websocket: WebSocket):
                 try:
                     async for message in deepgram_ws:
                         data = json.loads(message)
-                        if data.get("is_final"):
+                        
+                        if data.get("type") == "Results":
                             transcript = data.get("channel", {}).get("alternatives", [{}])[0].get("transcript", "")
+                            
                             if transcript.strip():
-                                print(f"🗣️ You said: {transcript}")
+                                if data.get("is_final"):
+                                    # flush=True forces Render to instantly show the log
+                                    print(f"✅ Final: {transcript}", flush=True)
+                                else:
+                                    # Watch the AI process your words live
+                                    print(f"⏳ Partial: {transcript}", flush=True)
+                                    
                 except Exception as e:
-                    print(f"Deepgram listen error: {e}")
+                    print(f"Deepgram listen error: {e}", flush=True)
                     
             # Launch transcription listener in the background
             asyncio.create_task(listen_to_deepgram())
