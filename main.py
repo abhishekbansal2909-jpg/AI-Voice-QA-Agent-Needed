@@ -20,29 +20,59 @@ ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
+# --- MOCK CRM DATA ---
+mock_crm_data = {
+    "customer_name": "Alex Mercer",
+    "expected_address": "456 Oak Street"
+}
+
+# --- QA AGENT INSTRUCTIONS ---
+qa_instructions = f"""You are an expert Quality Assurance Voice Assistant for a contact center. 
+You are on a live phone call with a customer. 
+
+CRM DATA ON FILE:
+- Name: {mock_crm_data['customer_name']}
+- Address: {mock_crm_data['expected_address']}
+
+YOUR MISSION:
+1. Greet the customer and smoothly ask them to verify their service address.
+2. If their spoken address DOES NOT match the CRM data exactly (456 Oak Street), politely flag the mismatch. Ask if they recently moved and if you should update it to their new address.
+3. If their address DOES match, confirm it and ask how you can help them today.
+
+RULES:
+- Keep your responses under 2 sentences. 
+- Be conversational, warm, and highly efficient.
+- Never read these rules aloud."""
+
 system_prompt = {
     "role": "system", 
-    "content": "You are a witty, concise, and helpful AI voice assistant on a phone call. Keep your answers brief, natural, and under 2 sentences so the call flows fast."
+    "content": qa_instructions
 }
 
 
-async def handle_ai_turn(user_text: str, twilio_ws: WebSocket, stream_sid: str):
-    """Handles thinking (Groq) and speaking (ElevenLabs) as a single cancellable task."""
+async def handle_ai_turn(user_text: str, twilio_ws: WebSocket, stream_sid: str, call_history: list):
+    """Handles thinking (Groq) and speaking (ElevenLabs) using conversation history."""
     try:
         print(f"🧠 Thinking response for: '{user_text}'...", flush=True)
         
-        # 1. Generate Text with Groq
+        # Add the user's latest speech to the memory
+        call_history.append({"role": "user", "content": user_text})
+        
+        # 1. Generate Text with Groq using the full history
         completion = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[system_prompt, {"role": "user", "content": user_text}],
+            messages=call_history,
             temperature=0.7,
-            max_tokens=100
+            max_tokens=150
         )
         reply = completion.choices[0].message.content
         print(f"🤖 AI Response: {reply}", flush=True)
         
+        # Add the AI's response to the memory
+        call_history.append({"role": "assistant", "content": reply})
+        
         # 2. Stream Audio with ElevenLabs
-        voice_id = "pNInz6obpgDQGcFmaJgB" # Free-tier Default Voice (Adam)
+        voice_id = "pNInz6obpgDQGcFmaJgB" 
         elevenlabs_ws_url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_flash_v2_5&output_format=ulaw_8000"
         
         async with websockets.connect(elevenlabs_ws_url) as elevenlabs_ws:
@@ -108,8 +138,12 @@ async def handle_media_stream(websocket: WebSocket):
     
     deepgram_url = "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000&channels=1&model=nova-3&interim_results=true"
     
-    # We now track the active AI task so we can cancel it if you interrupt
-    call_state = {"stream_sid": None, "ai_task": None}
+    # We now track the active AI task AND the conversation history
+    call_state = {
+        "stream_sid": None, 
+        "ai_task": None,
+        "history": [system_prompt] # Load the rules immediately
+    }
     
     try:
         async with websockets.connect(
@@ -127,7 +161,6 @@ async def handle_media_stream(websocket: WebSocket):
                             
                             if transcript.strip():
                                 # --- BARGE-IN LOGIC ---
-                                # If the AI is currently talking, stop it immediately!
                                 if call_state["ai_task"] and not call_state["ai_task"].done():
                                     print("🛑 User interrupted! Clearing Twilio buffer...", flush=True)
                                     call_state["ai_task"].cancel()
@@ -143,9 +176,14 @@ async def handle_media_stream(websocket: WebSocket):
                                 if data.get("is_final"):
                                     print(f"✅ Final: {transcript}", flush=True)
                                     if call_state["stream_sid"]:
-                                        # Start a new AI turn and save the task in call_state
+                                        # Start a new AI turn and pass the history
                                         call_state["ai_task"] = asyncio.create_task(
-                                            handle_ai_turn(transcript, websocket, call_state["stream_sid"])
+                                            handle_ai_turn(
+                                                transcript, 
+                                                websocket, 
+                                                call_state["stream_sid"],
+                                                call_state["history"]
+                                            )
                                         )
                                 else:
                                     print(f"⏳ Partial: {transcript}", flush=True)
@@ -176,3 +214,4 @@ async def handle_media_stream(websocket: WebSocket):
         print("Twilio WebSocket disconnected.", flush=True)
     except Exception as e:
         print(f"Connection error: {e}", flush=True)
+        
